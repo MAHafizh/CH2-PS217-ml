@@ -10,4 +10,6 @@ COPY . ./
 
 RUN pip install -r requirements.txt
 
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:app
+EXPOSE 5000
+
+CMD ["sh", "-c", "python -m flask run --host=0.0.0.0 --port=$PORT"]
