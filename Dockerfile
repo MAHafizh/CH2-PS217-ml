@@ -1,20 +1,13 @@
-# Use an image that includes necessary development libraries
-FROM python:3.8
+FROM python:3.10-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y libblas-dev liblapack-dev gfortran
+ENV PYTHONBUFFERED True
 
-# Set the working directory
-WORKDIR /app
+ENV APP_HOME /app
 
-# Copy the rest of your application files
-COPY . /app
+WORKDIR $APP_HOME
 
-# Install Python packages
-RUN pip install --upgrade pip
+COPY . ./
+
 RUN pip install -r requirements.txt
 
-EXPOSE 8080
-
-# Define the command to run your application
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app"]
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:app
