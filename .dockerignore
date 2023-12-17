@@ -1,0 +1,6 @@
+__pycache__
+*.pyc
+.dockerignore
+.env
+myenv
+getImageAPIlatest.py
