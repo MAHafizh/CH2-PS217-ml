@@ -8,8 +8,14 @@ WORKDIR $APP_HOME
 
 COPY . ./
 
+RUN apt-get update 
+RUN apt-get install ffmpeg libsm6 libxext6 -y
+RUN apt-get install -y libgl1-mesa-glx
+RUN apt-get install -y libopencv-dev python3-opencv
+
 RUN pip install -r requirements.txt
 
 EXPOSE 5000
 
-CMD ["sh", "-c", "python -m flask run --host=0.0.0.0 --port=$PORT"]
+CMD exec gunicorn --bind :$PORT app:app
+
