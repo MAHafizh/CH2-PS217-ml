@@ -1,8 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g, send_file
 import werkzeug
 import firebase_admin
 from firebase_admin import credentials, storage
 import os
+from io import BytesIO
 import cv2
 import numpy as np
 from tensorflow.keras.models import load_model
@@ -10,6 +11,11 @@ from tensorflow.keras.preprocessing import image
 from sklearn.preprocessing import StandardScaler
 from joblib import load
 import pandas as pd
+import requests
+import tempfile
+from PIL import Image
+import shutil
+from itertools import product
 
 from rembg import remove
 
@@ -77,6 +83,189 @@ def remove_background(input_image):
     output_image = remove(input_image, alpha_matting=True, alpha_matting_background_threshold=50)
     return output_image
 
+def find_matching_items(category, preferred_colors, all_items):
+    # Find items that match the category and are of the preferred colors
+    matching_items = [item for item in all_items if item['category'] == category]
+    color_matched_items = [item for item in matching_items if item['color'] in preferred_colors]
+
+    return color_matched_items if color_matched_items else matching_items
+
+def get_color_from_filename(filename):
+    parts = filename.rsplit('_', 2)
+    if len(parts) == 3 and parts[2].lower().endswith('.png'):
+        return parts[2].split('.')[0]
+    return None
+
+def process_image_and_generate_outfits(selected_image, all_images):
+
+    selected_color = get_color_from_filename(os.path.basename(selected_image))
+
+    if selected_color is not None:
+        return selected_color
+    else:
+        raise ValueError("Error: Unable to extract color from the filename.")
+ 
+def generate_all_outfit_combinations(selected_color, all_images):
+    outfit_categories = ['Topwear', 'Bottomwear', 'Shoes', 'Accessories']
+    outfits = []
+
+    # Find matching items for each category
+    matches_by_category = {
+        category: find_matching_items(category, [selected_color], all_images)
+        for category in outfit_categories
+    }
+
+    try:
+        outfits = [item['filename'] for category_items in matches_by_category.values() for item in category_items]
+
+        outfits_folder = "output_outfit"
+        os.makedirs(outfits_folder, exist_ok=True)   
+
+        for filename in outfits:
+            original_path = os.path.join("output_folder", filename)
+            destination_path = os.path.join(outfits_folder, filename)
+            shutil.copy(original_path, destination_path)
+
+        print("Outfits moved to output_outfit folder.")   
+
+    except ValueError as e:
+        error_message = f"Error creating outfit: {str(e)}"
+        return jsonify({
+            "status": {"code": 500, "message": "Internal Server Error"},
+            "data": {"error": error_message}
+        }), 500
+
+    if not outfits:
+        error_message = "No outfits found with the specified color preferences."
+        return jsonify({
+            "status": {"code": 404, "message": "Not Found"},
+            "data": {"error": error_message}
+        }), 404
+
+    return outfits
+
+def parse_filename(filename):
+    # Assuming the filename format is: "7592522501113-Accessories-green.png"
+    parts = filename.split('_')
+    if len(parts) != 3 or not parts[-1].lower().endswith('.png'):
+        return None, None
+
+    category = parts[-2]
+    color = parts[-1].split('.')[0]
+    return category, color
+
+def get_selected_image(uid, filename):
+    try:
+        if not uid:
+            return None
+        
+        bucket = storage.bucket()
+        blobs = bucket.list_blobs(prefix=f"userimages/{uid}/clothes/")
+
+        selected_image = None
+
+        for blob in blobs:
+            filesname = blob.name
+            file_name_ext = filesname.split("/")[-1]
+            file_name = file_name_ext
+
+            os.makedirs("output_folder", exist_ok=True)
+
+            url = f"https://storage.googleapis.com/{bucket.name}/{blob.name}"
+            file_name_without_extension, file_extension = os.path.splitext(file_name)
+            image_output = os.path.join("output_folder", f"{file_name_without_extension}.png")
+            download_image(url, image_output) 
+
+            if file_name == filename:
+                selected_image = os.path.join("output_folder", f"{file_name_without_extension}.png")
+                break
+
+        return selected_image 
+    except Exception as error:
+        print(f"error: {str(error)}")
+        return None
+
+def process_images(output_folder):
+    all_images=[]
+    # Scan the output images folder
+    for filename in os.listdir(output_folder):
+        if filename.endswith(('.jpg', '.jpeg', '.png')):
+            category, color = parse_filename(filename)
+            if category and color:
+                all_images.append({'filename': filename, 'category': category, 'color': color})
+
+    return all_images
+
+def download_image(url, local_filename):
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        with open(local_filename, 'wb') as file:
+            file.write(response.content)
+        print(f"Image downloaded successfully to {local_filename}")
+    else:
+        print(f"Failed to download image. Status code: {response.status_code}")
+
+def upload_outfits_to_firebase(uid, outfits_folder):
+    try:
+        bucket = storage.bucket()
+        remote_folder_path = f"userimages/{uid}/outfits/"
+
+        # Mencari nama folder yang belum terpakai
+        count = 1
+        while True:
+            folder_name_with_count = f"myoutfits_{count}"
+            blobs = bucket.list_blobs(prefix=f"{remote_folder_path}{folder_name_with_count}")
+            if not any(blobs):
+                blob = bucket.blob(f"{remote_folder_path}{folder_name_with_count}")
+                blob.upload_from_string('')
+                break
+
+            count += 1
+
+        # Mengecek apakah folder outfits sudah ada
+        blobs = bucket.list_blobs(prefix=remote_folder_path)
+        if not any(blobs):
+            blob = bucket.blob(remote_folder_path)
+            blob.upload_from_string('')  # Membuat folder outfits
+
+        # Mengunggah semua file dari folder local ke Firebase Storage
+        for filename in os.listdir(outfits_folder):
+            if filename.endswith('.png'):
+                local_path = os.path.join(outfits_folder, filename)
+                remote_path = os.path.join(remote_folder_path, folder_name_with_count, filename)
+                remote_path = remote_path.replace("\\", "/")
+                blob = bucket.blob(remote_path)
+                blob.upload_from_filename(local_path)
+
+        print("Outfits uploaded to Firebase Storage.")
+        return count
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return None
+
+def get_outfits_folder(uid, selected_number):
+    try:
+        if not uid:
+            return None
+
+        bucket = storage.bucket()
+        blobs = bucket.list_blobs(prefix=f"userimages/{uid}/outfits/myoutfits_{selected_number}/")
+
+        outfit_images = []
+        for blob in blobs:
+            filename = os.path.basename(blob.name)
+            url = f"https://storage.googleapis.com/{bucket.name}/{blob.name}"
+            outfit_images.append({'filename': filename, 'url': url})
+
+        return outfit_images
+
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return None
+
+
 #buat token 
 SECRET_KEY = 'pwf1rebase0!'
 def token_required(f):
@@ -88,9 +277,7 @@ def token_required(f):
             return jsonify({'message': 'Token is missing'}), 401
         
         if token.startswith('Bearer '):
-            token = token.split(' ')[1]
-
-        print("Received token:", token)    
+            token = token.split(' ')[1]   
 
         try:
             # Decode the token using the secret key
@@ -118,16 +305,17 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 @token_required
-def upload_file(uid):
-    if 'file' not in request.files:
+def upload_image(uid):
+    if 'image' not in request.files:
         return jsonify({'message': 'No file part in the request'}), 400
 
-    file = request.files['file']
+    file = request.files['image']
     if file.filename == '':
         return jsonify({'message': 'No file selected for uploading'}), 400
 
     if file:
         filename = werkzeug.utils.secure_filename(file.filename)
+        filename = filename.replace('-', '').replace('_', '')
 
         with file.stream as file_stream:
             input_image = file_stream.read()
@@ -148,11 +336,48 @@ def upload_file(uid):
 
         blob.metadata = setMetadata
         blob.upload_from_string(output_image, content_type='image/jpeg')
+        url = f"https://storage.googleapis.com/{bucket.name}/{final_output_path}"
+        g.url = url
 
-        return jsonify({'message': 'File successfully uploaded and processed', 'predicted_class': predicted_class, 'color': color_prediction}), 200
+        return jsonify({
+            'message': 'File successfully uploaded and processed',
+            'url': url,
+            'predicted_class': predicted_class, 
+            'color': color_prediction,
+        }), 200
 
     return jsonify({'message': 'Something went wrong'}), 500
 
+@app.route('/mix-match', methods=['GET'])
+@token_required
+def get_image(uid):
+    try:
+        user_filename = request.args.get('filename')
+
+        selected_image = get_selected_image(uid, user_filename)
+        selected_image = selected_image.replace("\\", "/")
+        local_folder_path = "output_folder"
+
+        all_images = process_images(local_folder_path)
+        selected_color = process_image_and_generate_outfits(selected_image, all_images)
+        generate_all_outfit_combinations(selected_color, all_images)
+        count = upload_outfits_to_firebase(uid, "output_outfit")
+        outfits = get_outfits_folder(uid, count)
+
+        return jsonify({
+            "status": {"code": 200, "message": "Success"},
+            "data": {
+                "message": "Image processing and outfit generation completed successfully",
+                "outfits": outfits  # tambahkan outfits ke dalam respon JSON
+            }
+        }), 200
+    
+    except Exception as error:
+        return jsonify({
+            "status": {"code": 500, "message": "Internal Server Error"},
+            "data": {"error": str(error)}
+        }), 500
+     
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
