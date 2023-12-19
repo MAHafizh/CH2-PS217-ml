@@ -12,13 +12,9 @@ from sklearn.preprocessing import StandardScaler
 from joblib import load
 import pandas as pd
 import requests
-import tempfile
 from PIL import Image
 import shutil
-from itertools import product
-
 from rembg import remove
-
 import jwt 
 from functools import wraps
 
