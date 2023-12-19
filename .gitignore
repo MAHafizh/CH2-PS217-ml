@@ -3,3 +3,5 @@ __pycache__/
 .env
 myenv
 getImageAPIlatest.py
+backup_main.py
+app_copy.py

@@ -4,3 +4,6 @@ __pycache__/
 .env
 myenv
 getImageAPIlatest.py
+.gitignore
+BLACKBOX_README.md
+backup_main.py
