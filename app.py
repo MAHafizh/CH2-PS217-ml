@@ -373,9 +373,10 @@ def get_image(uid):
         shutil.rmtree("output_outfit")
 
         return jsonify({
-            "status": {"code": 200, "message": "Success"},
+            "status": {
+                "code": 200, 
+                "message": "Outfit generation completed successfully and uploded in storage"},
             "data": {
-                "message": "Outfit generation completed successfully and uploded in storage",
                 "outfits": outfits 
             }
         }), 200
