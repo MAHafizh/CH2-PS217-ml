@@ -1,9 +1,7 @@
 __pycache__/
 *.pyc
-.dockerignore
 .env
 myenv
-getImageAPIlatest.py
 .gitignore
-BLACKBOX_README.md
-backup_main.py
+README.md
+app_copy.py
