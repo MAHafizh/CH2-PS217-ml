@@ -92,7 +92,7 @@ def find_matching_items(category, preferred_colors, all_items):
 
 def get_color_from_filename(filename):
     parts = filename.rsplit('_', 2)
-    if len(parts) == 3 and parts[2].lower().endswith('.png'):
+    if len(parts) == 3 and parts[2].lower().endswith(('.jpg', '.jpeg', '.png')):
         return parts[2].split('.')[0]
     return None
 
@@ -147,7 +147,7 @@ def generate_all_outfit_combinations(selected_color, all_images):
 def parse_filename(filename):
     # Assuming the filename format is: "7592522501113-Accessories-green.png"
     parts = filename.split('_')
-    if len(parts) != 3 or not parts[-1].lower().endswith('.png'):
+    if len(parts) != 3 or not parts[-1].lower().endswith(('.jpg', '.jpeg', '.png')):
         return None, None
 
     category = parts[-2]
@@ -159,31 +159,41 @@ def get_selected_image(uid, filename):
         if not uid:
             return None
         
+        prefix = f"userimages/{uid}/clothes/"
         bucket = storage.bucket()
-        blobs = bucket.list_blobs(prefix=f"userimages/{uid}/clothes/")
+        downloaded_images = download_images(bucket, prefix, "output_folder")
 
         selected_image = None
+        for image_path in downloaded_images:
+            filesname = os.path.basename(image_path)
 
-        for blob in blobs:
-            filesname = blob.name
-            file_name_ext = filesname.split("/")[-1]
-            file_name = file_name_ext
-
-            os.makedirs("output_folder", exist_ok=True)
-
-            url = f"https://storage.googleapis.com/{bucket.name}/{blob.name}"
-            file_name_without_extension, file_extension = os.path.splitext(file_name)
-            image_output = os.path.join("output_folder", f"{file_name_without_extension}.png")
-            download_image(url, image_output) 
-
-            if file_name == filename:
-                selected_image = os.path.join("output_folder", f"{file_name_without_extension}.png")
+            if filesname == filename:
+                selected_image = image_path
                 break
 
         return selected_image 
+
     except Exception as error:
         print(f"error: {str(error)}")
         return None
+    
+def download_images(bucket, prefix, output_folder):
+    blobs = bucket.list_blobs(prefix=prefix)
+
+    downloaded_images = []
+    for blob in blobs:
+        filename = os.path.basename(blob.name)
+        print("Downloading image:", filename)
+
+        os.makedirs(output_folder, exist_ok=True)
+
+        url = f"https://storage.googleapis.com/{bucket.name}/{blob.name}"
+        image_output = os.path.join(output_folder, filename)
+        download_image(url, image_output)
+
+        downloaded_images.append(image_output)
+
+    return downloaded_images    
 
 def process_images(output_folder):
     all_images=[]
@@ -218,7 +228,6 @@ def upload_outfits_to_firebase(uid, outfits_folder):
             blobs = bucket.list_blobs(prefix=f"{remote_folder_path}{folder_name_with_count}")
             if not any(blobs):
                 blob = bucket.blob(f"{remote_folder_path}{folder_name_with_count}")
-                blob.upload_from_string('')
                 break
 
             count += 1
@@ -231,7 +240,7 @@ def upload_outfits_to_firebase(uid, outfits_folder):
 
         # Mengunggah semua file dari folder local ke Firebase Storage
         for filename in os.listdir(outfits_folder):
-            if filename.endswith('.png'):
+            if filename.endswith('.jpg'):
                 local_path = os.path.join(outfits_folder, filename)
                 remote_path = os.path.join(remote_folder_path, folder_name_with_count, filename)
                 remote_path = remote_path.replace("\\", "/")
@@ -364,11 +373,14 @@ def get_image(uid):
         count = upload_outfits_to_firebase(uid, "output_outfit")
         outfits = get_outfits_folder(uid, count)
 
+        shutil.rmtree("output_folder")
+        shutil.rmtree("output_outfit")
+
         return jsonify({
             "status": {"code": 200, "message": "Success"},
             "data": {
-                "message": "Image processing and outfit generation completed successfully",
-                "outfits": outfits  # tambahkan outfits ke dalam respon JSON
+                "message": "Outfit generation completed successfully and uploded in storage",
+                "outfits": outfits 
             }
         }), 200
     
